@@ -1,0 +1,96 @@
+version: "3.9"
+
+services:
+  # ---------- Infra ----------
+  redpanda:
+    image: docker.redpanda.com/redpandadata/redpanda:v23.3.5
+    command:
+      - redpanda
+      - start
+      - --smp=1
+      - --overprovisioned
+      - --node-id=0
+      - --kafka-addr=PLAINTEXT://0.0.0.0:9092
+      - --advertise-kafka-addr=PLAINTEXT://redpanda:9092
+    ports:
+      - "9092:9092"
+    healthcheck:
+      test: ["CMD-SHELL", "rpk cluster health | grep -q 'Healthy:.*true'"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./postgres-init:/docker-entrypoint-initdb.d
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  ollama:
+    image: ollama/ollama:latest
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    # After first start run once: docker exec -it <ollama_container> ollama pull llama3.2:1b
+
+  # ---------- Microservices ----------
+  ingestion-service:
+    build: ingestion-service
+    ports:
+      - "8001:8000"
+    environment:
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/ingestion_db
+      KAFKA_BOOTSTRAP_SERVERS: redpanda:9092
+      RAW_REVIEWS_TOPIC: raw-reviews
+    depends_on:
+      redpanda:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+
+  ai-processing-service:
+    build: ai-processing-service
+    ports:
+      - "8002:8000"
+    environment:
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/ai_processing_db
+      KAFKA_BOOTSTRAP_SERVERS: redpanda:9092
+      RAW_REVIEWS_TOPIC: raw-reviews
+      PROCESSED_REVIEWS_TOPIC: processed-reviews
+      OLLAMA_URL: http://ollama:11434
+      OLLAMA_MODEL: llama3.2:1b
+    depends_on:
+      redpanda:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+
+  analytics-service:
+    build: analytics-service
+    ports:
+      - "8003:8000"
+    environment:
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/analytics_db
+      KAFKA_BOOTSTRAP_SERVERS: redpanda:9092
+      PROCESSED_REVIEWS_TOPIC: processed-reviews
+      NEGATIVE_ALERT_THRESHOLD: "0.5"
+    depends_on:
+      redpanda:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+
+volumes:
+  pgdata:
+  ollama_data:
