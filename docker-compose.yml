@@ -1,7 +1,8 @@
-version: "3.9"
-
 services:
-  # ---------- Infra ----------
+  # ============================================================
+  # Infrastructure
+  # ============================================================
+
   redpanda:
     image: docker.redpanda.com/redpandadata/redpanda:v23.3.5
     command:
@@ -19,22 +20,25 @@ services:
       interval: 5s
       timeout: 5s
       retries: 20
+      start_period: 10s
 
   postgres:
     image: postgres:16-alpine
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: postgres
     volumes:
       - pgdata:/var/lib/postgresql/data
-      - ./postgres-init:/docker-entrypoint-initdb.d
+      - ./postgres-init:/docker-entrypoint-initdb.d:ro
     ports:
       - "5432:5432"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      test: ["CMD-SHELL", "pg_isready -U postgres -d postgres"]
       interval: 5s
       timeout: 5s
       retries: 10
+      start_period: 10s
 
   ollama:
     image: ollama/ollama:latest
@@ -42,11 +46,14 @@ services:
       - "11434:11434"
     volumes:
       - ollama_data:/root/.ollama
-    # After first start run once: docker exec -it <ollama_container> ollama pull llama3.2:1b
 
-  # ---------- Microservices ----------
+  # ============================================================
+  # Microservices
+  # ============================================================
+
   ingestion-service:
-    build: ingestion-service
+    build:
+      context: ./ingestion-service
     ports:
       - "8001:8000"
     environment:
@@ -54,13 +61,24 @@ services:
       KAFKA_BOOTSTRAP_SERVERS: redpanda:9092
       RAW_REVIEWS_TOPIC: raw-reviews
     depends_on:
-      redpanda:
-        condition: service_healthy
       postgres:
         condition: service_healthy
+      redpanda:
+        condition: service_healthy
+    command:
+      [
+        "/app/docker-entrypoint.sh",
+        "uvicorn",
+        "app.main:app",
+        "--host",
+        "0.0.0.0",
+        "--port",
+        "8000"
+      ]
 
   ai-processing-service:
-    build: ai-processing-service
+    build:
+      context: ./ai-processing-service
     ports:
       - "8002:8000"
     environment:
@@ -71,13 +89,26 @@ services:
       OLLAMA_URL: http://ollama:11434
       OLLAMA_MODEL: llama3.2:1b
     depends_on:
-      redpanda:
-        condition: service_healthy
       postgres:
         condition: service_healthy
+      redpanda:
+        condition: service_healthy
+      ollama:
+        condition: service_started
+    command:
+      [
+        "/app/docker-entrypoint.sh",
+        "uvicorn",
+        "app.main:app",
+        "--host",
+        "0.0.0.0",
+        "--port",
+        "8000"
+      ]
 
   analytics-service:
-    build: analytics-service
+    build:
+      context: ./analytics-service
     ports:
       - "8003:8000"
     environment:
@@ -86,10 +117,24 @@ services:
       PROCESSED_REVIEWS_TOPIC: processed-reviews
       NEGATIVE_ALERT_THRESHOLD: "0.5"
     depends_on:
-      redpanda:
-        condition: service_healthy
       postgres:
         condition: service_healthy
+      redpanda:
+        condition: service_healthy
+    command:
+      [
+        "/app/docker-entrypoint.sh",
+        "uvicorn",
+        "app.main:app",
+        "--host",
+        "0.0.0.0",
+        "--port",
+        "8000"
+      ]
+
+# ==============================================================
+# Volumes
+# ==============================================================
 
 volumes:
   pgdata:
