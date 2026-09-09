@@ -5,9 +5,9 @@ from fastapi import Depends, FastAPI, HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from consumer import start_consumer_task, stop_consumer_task
-from database import get_db
-from models import Alert, ProductStats
+from app.consumer import start_consumer_task, stop_consumer_task
+from app.database import get_db
+from app.models import Alert, ProductStats
 
 logging.basicConfig(level=logging.INFO)
 
